@@ -2,9 +2,9 @@
 
 import argparse
 import base64
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_v1_5
-from Crypto.Cipher import AES
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
 def check_and_strip_padding(data):
@@ -26,8 +26,8 @@ def main():
     parser.add_argument("output", help="Output verilog file")
     args = parser.parse_args()
 
-    f = open(args.key, "r")
-    rsa_key = RSA.import_key(f.read())
+    f = open(args.key, "rb")
+    rsa_key = load_pem_private_key(f.read(), None)
     f.close()
 
     fi = open(args.input, "rb")
@@ -49,16 +49,15 @@ def main():
 
                 if base64_type == "key_block":
                     try:
-                        cipher = PKCS1_v1_5.new(rsa_key)
-                        encryption_key = cipher.decrypt(data, "")
+                        encryption_key = rsa_key.decrypt(data, padding.PKCS1v15())
                     except:
                         pass
                 elif base64_type == "data_block":
                     if encryption_key is None:
                         raise Exception("Encryption key wasn't decoded")
                     aes_iv = data[:10] + bytes(6 * [0])
-                    aes = AES.new(encryption_key, AES.MODE_CBC, aes_iv)
-                    plaintext = aes.decrypt(data)
+                    aes = Cipher(algorithms.AES(encryption_key), modes.CBC(aes_iv)).decryptor()
+                    plaintext = aes.update(data)
                     plaintext = plaintext[16:]
                     plaintext = check_and_strip_padding(plaintext)
                     if plaintext.endswith(b"\0"):
