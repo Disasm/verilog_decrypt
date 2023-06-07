@@ -5,6 +5,14 @@ import base64
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import hashes
+
+
+def hash(s):
+    m = hashes.Hash(hashes.MD5())
+    m.update(b"659a1ac1bbf0491ce65203f31ea112b8")
+    m.update(s.encode("utf8"))
+    return m.finalize().hex()[-4:]
 
 
 def check_and_strip_padding(data):
@@ -17,6 +25,23 @@ def check_and_strip_padding(data):
         if data[-1 - i] != byte:
             raise Exception("Invalid padding")
     return data[:-padding_len]
+
+
+def extract_encryption_key(blob, params, key_length):
+    if len(blob) == key_length:
+        return blob
+
+    # Proprietary hacks start here
+    if hash(params["encrypt_agent"]) == "fdab":
+        if hash(params["version"]) == "ad91":
+            return blob[24:24 + key_length]
+        if hash(params["version"]) == "e857":
+            t = blob[21:]
+            return t[key_length // 2:key_length] + t[:key_length // 2][::-1]
+        if hash(params["version"]) == "ae96":
+            t = blob[26:]
+            return t[:key_length // 2][::-1] + t[key_length // 2:key_length]
+    print("Unknown key encoding")
 
 
 def main():
@@ -38,6 +63,7 @@ def main():
     base64_lines = []
     base64_type = None
     encryption_key = None
+    params = {}
     for line in fi:
         if is_base64:
             line_str = line.decode("utf8").strip()
@@ -49,7 +75,8 @@ def main():
 
                 if base64_type == "key_block":
                     try:
-                        encryption_key = rsa_key.decrypt(data, padding.PKCS1v15())
+                        key_blob = rsa_key.decrypt(data, padding.PKCS1v15())
+                        encryption_key = extract_encryption_key(key_blob, params, 16)
                     except:
                         pass
                 elif base64_type == "data_block":
@@ -68,7 +95,7 @@ def main():
 
         if line.startswith(b"`pragma protect"):
             line = line.decode("utf8").strip()
-            param = line.split()[2]
+            param = line.split(None, 2)[2]
 
             if param == "begin_protected":
                 is_protected = True
@@ -78,6 +105,9 @@ def main():
                 data_method = param.split('"')[1]
                 if data_method not in ["aes128-cbc"]:
                     raise Exception("Unsupported data_method: " + data_method)
+            if "=" in param:
+                a = param.split("=", 1)
+                params[a[0]] = a[1]
             if param in ["key_block", "data_block"]:
                 base64_type = param
                 is_base64 = True
